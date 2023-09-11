@@ -1,5 +1,4 @@
 use std::cell::RefCell;
-use std::fmt::{self, Debug, Formatter};
 use std::str::from_utf8;
 use std::vec;
 
@@ -49,27 +48,6 @@ impl Mapping {
             .collect()
     }
 }
-
-impl Debug for Mapping {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        for i in 0..26 {
-            write!(f, "{}", (i + b'A') as char)?;
-        }
-        writeln!(f)?;
-
-        for l in self.map.iter() {
-            if let Some(l) = l {
-                write!(f, "{}", *l as char)?;
-            } else {
-                write!(f, "?")?;
-            }
-        }
-        writeln!(f)?;
-
-        Ok(())
-    }
-}
-
 /// A list of candidates of decoded text, stored as sorted list of words bytes.
 #[derive(Clone, Copy)]
 struct CandidateList<'a>(&'a [&'a [u8]]);
@@ -101,8 +79,8 @@ fn main() {
     // Generate the crack pharse
     let clean_ciper = ciper
         .iter()
-        .map(|&c| c.to_ascii_uppercase())
-        .filter(|&c| c.is_ascii_uppercase() || c == b' ')
+        .copied()
+        .filter(|&c| c.is_ascii_alphabetic() || c == b' ')
         .collect::<Vec<_>>();
     let mut crack_pharse = generate_crack_pharse(&clean_ciper);
     // special assumption: PRCSOFQX -> SECURITY
@@ -126,10 +104,11 @@ fn main() {
         let decoded = from_utf8(&decoded).unwrap();
 
         println!("====================");
+        print!("ciper: ");
         for c in 'A'..='Z' {
             print!("{c}");
         }
-        println!();
+        print!("\nplain: ");
         for c in b'A'..=b'Z' {
             let l = mapping.get(c).unwrap_or(b'?') as char;
             print!("{l}");
@@ -195,7 +174,7 @@ fn candidate_by_length<'a>(max_length: usize) -> Vec<CandidateList<'a>> {
             continue;
         }
         let word = &word[..word.len() - 1];
-        if word.len() <= 3 || word.len() > max_length {
+        if (2..=3).contains(&word.len()) || word.len() > max_length {
             continue;
         }
         words_by_length[word.len()].push(word);
@@ -254,19 +233,20 @@ fn word_mapping(base: Mapping, crack_word: CrackWord, produce: impl Fn(Mapping) 
 
             let a = candidates.0.partition_point(|can| can[i] < l);
             let b = candidates.0.partition_point(|can| can[i] <= l);
-            let candidates = &candidates.0[a..b];
+            let reduced_candidates = &candidates.0[a..b];
 
-            if candidates.is_empty() {
+            if reduced_candidates.is_empty() {
                 return;
             }
 
             let new_crackword = CrackWord {
                 ciper,
-                candidates: CandidateList::new(candidates),
+                candidates: CandidateList::new(reduced_candidates),
             };
             inner(i + 1, base, new_crackword, produce)
         } else {
             // try all possible mapping (a-z)
+            let mut candidates = candidates;
             for l in b'a'..=b'z' {
                 if base.exists(l) {
                     continue;
@@ -274,19 +254,21 @@ fn word_mapping(base: Mapping, crack_word: CrackWord, produce: impl Fn(Mapping) 
 
                 let a = candidates.0.partition_point(|can| can[i] < l);
                 let b = candidates.0.partition_point(|can| can[i] <= l);
-                let candidates = &candidates.0[a..b];
+                let reduced_candidates = &candidates.0[a..b];
 
-                if candidates.is_empty() {
+                if reduced_candidates.is_empty() {
                     continue;
                 }
 
-                if let Ok(new_base) = base.set(c, l) {
-                    let new_crackword = CrackWord {
-                        ciper,
-                        candidates: CandidateList::new(candidates),
-                    };
-                    inner(i + 1, new_base, new_crackword, produce);
-                }
+                let new_base = base.set(c, l).expect("should not fail");
+                let new_crackword = CrackWord {
+                    ciper,
+                    candidates: CandidateList::new(reduced_candidates),
+                };
+                inner(i + 1, new_base, new_crackword, produce);
+
+                // reduce candidates for next iteration
+                candidates.0 = &candidates.0[b..];
             }
         }
     }
